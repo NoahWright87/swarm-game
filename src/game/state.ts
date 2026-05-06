@@ -9,7 +9,7 @@ const SWARM_COLOR = '#00ffff';
 
 let nextShipId = 0;
 
-export function mkSwarmFighter(orbitAngle: number, orbitRadius: number): SwarmShip {
+export function mkSwarmFighter(slotIndex: number, orbitRadius: number): SwarmShip {
   const preset = SHIP_PRESETS['swarmFighter'];
   const body   = buildBody(preset.body);
   const rWing  = buildWing(preset.wing,  body.attachX, body.attachY,  1);
@@ -23,21 +23,17 @@ export function mkSwarmFighter(orbitAngle: number, orbitRadius: number): SwarmSh
     cx: body.cx, cy: body.cy,
     color: SWARM_COLOR,
     health: 3, maxHealth: 3,
-    fireTimer: Math.random() * 40, // stagger firing
+    fireTimer: Math.random() * 40,
     missileTimer: Math.random() * 60,
-    orbitAngle,
+    slotIndex,
     orbitRadius,
-    x: W / 2 + Math.cos(orbitAngle) * orbitRadius,
-    y: H - 110 + Math.sin(orbitAngle) * orbitRadius,
-    angle: orbitAngle + Math.PI / 2,
+    x: W / 2 + Math.cos((TAU / 3) * slotIndex - Math.PI / 2) * orbitRadius,
+    y: H - 110 + Math.sin((TAU / 3) * slotIndex - Math.PI / 2) * orbitRadius,
   };
 }
 
 export function initState(): GameState {
-  const swarm: SwarmShip[] = [0, 1, 2].map(i => {
-    const angle = (TAU / 3) * i - Math.PI / 2;
-    return mkSwarmFighter(angle, 55);
-  });
+  const swarm: SwarmShip[] = [0, 1, 2].map(i => mkSwarmFighter(i, 55));
 
   return {
     mode: 'playing',
@@ -49,6 +45,7 @@ export function initState(): GameState {
     cx: W / 2,
     cy: H - 110,
     cvx: 0, cvy: 0,
+    orbitPhase: -Math.PI / 2,
     swarm,
     stats: defaultStats(),
     regenAccum: 0,
@@ -56,6 +53,7 @@ export function initState(): GameState {
     playerBullets: [],
     enemyBullets: [],
     debris: [],
+    explosions: [],
     damageNumbers: [],
     waveActive: false,
     waveTimer: 0,

@@ -9,7 +9,6 @@ const W = 390, H = 700;
 function clamp(v: number, lo: number, hi: number) { return Math.max(lo, Math.min(hi, v)); }
 
 export function drawGame(ctx: CanvasRenderingContext2D, gs: GameState): void {
-  // Background
   ctx.fillStyle = '#080c14';
   ctx.fillRect(0, 0, W, H);
 
@@ -42,21 +41,21 @@ export function drawGame(ctx: CanvasRenderingContext2D, gs: GameState): void {
     const lWing = transformPoly(e.lWingPts, e.x, e.y, e.angle);
     const rWing = transformPoly(e.rWingPts, e.x, e.y, e.angle);
     const sw    = e.behavior === 'tank' ? 2 : 1.5;
-    drawPoly(ctx, lWing, e.color, hp * 0.45 + 0.05, e.color, sw,    hp > 0.4);
-    drawPoly(ctx, rWing, e.color, hp * 0.45 + 0.05, e.color, sw,    hp > 0.4);
-    drawPoly(ctx, body,  e.color, hp * 0.55 + 0.05, e.color, sw + 0.5, hp > 0.4);
+    drawPoly(ctx, lWing, e.color, hp * 0.45 + 0.05, e.color, sw,        hp > 0.4);
+    drawPoly(ctx, rWing, e.color, hp * 0.45 + 0.05, e.color, sw,        hp > 0.4);
+    drawPoly(ctx, body,  e.color, hp * 0.55 + 0.05, e.color, sw + 0.5,  hp > 0.4);
   });
 
-  // Swarm ships
+  // Swarm ships (always drawn at angle 0 — face up)
   gs.swarm.forEach(s => {
-    const hp = clamp(s.health / s.maxHealth, 0, 1);
+    const hp  = clamp(s.health / s.maxHealth, 0, 1);
     const fl  = hp < 0.2 ? (Math.random() > 0.15 ? 1 : 0.3) : 1;
-    const body  = transformPoly(s.bodyPts,  s.x, s.y, s.angle);
-    const lWing = transformPoly(s.lWingPts, s.x, s.y, s.angle);
-    const rWing = transformPoly(s.rWingPts, s.x, s.y, s.angle);
-    drawPoly(ctx, lWing, s.color, hp * fl * 0.5 + 0.05, s.color, 1.5, hp > 0.3);
-    drawPoly(ctx, rWing, s.color, hp * fl * 0.5 + 0.05, s.color, 1.5, hp > 0.3);
-    drawPoly(ctx, body,  s.color, hp * fl * 0.65 + 0.05, s.color, 2,  hp > 0.3);
+    const body  = transformPoly(s.bodyPts,  s.x, s.y, 0);
+    const lWing = transformPoly(s.lWingPts, s.x, s.y, 0);
+    const rWing = transformPoly(s.rWingPts, s.x, s.y, 0);
+    drawPoly(ctx, lWing, s.color, hp * fl * 0.5  + 0.05, s.color, 1.5, hp > 0.3);
+    drawPoly(ctx, rWing, s.color, hp * fl * 0.5  + 0.05, s.color, 1.5, hp > 0.3);
+    drawPoly(ctx, body,  s.color, hp * fl * 0.65 + 0.05, s.color, 2,   hp > 0.3);
   });
 
   // Player bullets
@@ -81,6 +80,26 @@ export function drawGame(ctx: CanvasRenderingContext2D, gs: GameState): void {
   });
 
   drawDebris(ctx, gs.debris);
+
+  // Missile explosions — expanding ring
+  gs.explosions.forEach(ex => {
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, ex.life) * 0.85;
+    ctx.strokeStyle = ex.color;
+    ctx.lineWidth   = 2.5;
+    ctx.shadowColor = ex.color;
+    ctx.shadowBlur  = 14;
+    ctx.beginPath();
+    ctx.arc(ex.x, ex.y, ex.radius, 0, Math.PI * 2);
+    ctx.stroke();
+    // Inner fill flash at start of explosion
+    if (ex.life > 0.7) {
+      ctx.globalAlpha = (ex.life - 0.7) / 0.3 * 0.3;
+      ctx.fillStyle = ex.color;
+      ctx.fill();
+    }
+    ctx.restore();
+  });
 
   // Damage numbers
   gs.damageNumbers.forEach(n => {

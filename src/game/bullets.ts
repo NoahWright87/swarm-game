@@ -20,7 +20,7 @@ export function fireBullets(s: Stats, x: number, y: number): Bullet[] {
       vy: Math.sin(a) * s.bulletSpeed,
       damage: s.damage, pierce: s.pierce, pierceMult: 1,
       critChance: s.critChance, critMult: s.critMult, lifeSteal: s.lifeSteal,
-      isMissile: false, color: '#ffffff', thick: 1.5 + s.damage * 0.15,
+      isMissile: false, color: '#ffffff', thick: 1.5 + s.damage * 0.15, hitIds: [],
     });
   }
   return out;
@@ -40,7 +40,7 @@ export function fireMissiles(s: Stats, x: number, y: number): Bullet[] {
       vx: Math.cos(a) * spd, vy: Math.sin(a) * spd,
       damage: s.damage * MISSILE_DMG_MULT, pierce: s.pierce, pierceMult: 1,
       critChance: s.critChance, critMult: s.critMult, lifeSteal: s.lifeSteal,
-      isMissile: true, color: '#ff8800', thick: 3,
+      isMissile: true, color: '#ff8800', thick: 3, hitIds: [],
     });
   }
   return out;

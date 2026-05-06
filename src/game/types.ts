@@ -1,29 +1,23 @@
 import type { Point, DebrisSegment } from '../geometry';
 
 export interface Stats {
-  // Movement
   speed: number;
-  // Weapons
   bulletCount: number;
   shotsPerSec: number;
   damage: number;
   bulletSpeed: number;
   pierce: number;
   missileCount: number;
-  // Combat
   critChance: number;
   critMult: number;
   lifeSteal: number;
-  // Sustain
   regenPerSec: number;
-  // Meta
   xpBonus: number;
 }
 
 export interface SwarmShip {
   id: number;
   role: 'fighter';
-  // Precomputed geometry (local space, centered at 0,0)
   bodyPts: Point[];
   lWingPts: Point[];
   rWingPts: Point[];
@@ -31,14 +25,12 @@ export interface SwarmShip {
   color: string;
   health: number;
   maxHealth: number;
-  // Firing
   fireTimer: number;
   missileTimer: number;
-  // Orbit behavior
-  orbitAngle: number;
+  // Orbit slot — position is orbitPhase + (TAU/N)*slotIndex, angle always 0 (facing up)
+  slotIndex: number;
   orbitRadius: number;
-  // World position (updated each frame)
-  x: number; y: number; angle: number;
+  x: number; y: number;
 }
 
 export interface Enemy {
@@ -70,6 +62,16 @@ export interface Bullet {
   isMissile: boolean;
   color: string;
   thick: number;
+  hitIds: number[];  // enemy IDs already struck — prevents pierce re-hitting same enemy
+}
+
+export interface Explosion {
+  x: number; y: number;
+  radius: number;
+  maxRadius: number;
+  life: number;   // 1 → 0
+  decay: number;
+  color: string;
 }
 
 export interface DamageNumber {
@@ -84,7 +86,7 @@ export interface Upgrade {
   label: string;
   desc: string;
   icon: string;
-  apply: (s: Stats) => Stats;
+  apply: (s: Stats, swarm: SwarmShip[]) => { stats: Stats; swarm: SwarmShip[] };
 }
 
 export interface GameState {
@@ -94,24 +96,21 @@ export interface GameState {
   level: number;
   xp: number;
   xpNeeded: number;
-  // The center of mass — what the player actually steers
   cx: number; cy: number;
   cvx: number; cvy: number;
-  // Fleet
+  orbitPhase: number;  // shared phase, increments each frame
   swarm: SwarmShip[];
   stats: Stats;
   regenAccum: number;
-  // Entities
   enemies: Enemy[];
   playerBullets: Bullet[];
   enemyBullets: Bullet[];
   debris: DebrisSegment[];
+  explosions: Explosion[];
   damageNumbers: DamageNumber[];
-  // Wave state
   waveActive: boolean;
   waveTimer: number;
   upgradeChoices: Upgrade[];
-  // Input
   touchTarget: { x: number; y: number } | null;
   keys: Record<string, boolean>;
 }

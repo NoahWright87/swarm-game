@@ -8,10 +8,10 @@ import type { GameState, SwarmShip, Enemy, Bullet, DamageNumber } from './types'
 
 const W = 390, H = 700;
 const TAU = Math.PI * 2;
-const ENEMY_BSPD = 3.0;
+const ENEMY_BSPD   = 3.0;
 const ENEMY_RAM_BASE = 0.28;
 const ORBIT_ANGULAR_SPEED = 0.022;
-const HIT_RADIUS = 30; // broad-phase check radius
+const HIT_RADIUS   = 22;  // broad-phase radius (matches smaller ships)
 
 function clamp(v: number, lo: number, hi: number) { return Math.max(lo, Math.min(hi, v)); }
 function lerp(a: number, b: number, t: number) { return a + (b - a) * t; }
@@ -27,42 +27,53 @@ function mkNum(x: number, y: number, dmg: number, crit: boolean, splash: boolean
   };
 }
 
-function updateSwarmOrbits(ships: SwarmShip[], cx: number, cy: number): SwarmShip[] {
-  return ships.map((s, i) => {
-    const newAngle = s.orbitAngle + ORBIT_ANGULAR_SPEED;
-    // Space ships evenly around orbit regardless of swarm size
-    const offset = (TAU / ships.length) * i;
-    const a = newAngle + offset;
+// Swarm ships always face UP (angle = 0). Only their position orbits.
+function updateSwarmOrbits(ships: SwarmShip[], cx: number, cy: number, orbitPhase: number): SwarmShip[] {
+  const n = ships.length;
+  return ships.map(s => {
+    const a = orbitPhase + (TAU / n) * s.slotIndex;
     return {
       ...s,
-      orbitAngle: newAngle,
       x: cx + Math.cos(a) * s.orbitRadius,
       y: cy + Math.sin(a) * s.orbitRadius,
-      angle: a + Math.PI / 2,
+      // angle intentionally omitted — SwarmShip has no angle field; always drawn at 0
     };
   });
 }
 
-function getWorldPoly(e: Enemy, part: 'body' | 'lWing' | 'rWing') {
+// Re-number surviving ships 0..N-1 so they space evenly after a death
+function reindexSwarm(ships: SwarmShip[]): SwarmShip[] {
+  return ships.map((s, i) => ({ ...s, slotIndex: i }));
+}
+
+function getEnemyWorldPoly(e: Enemy, part: 'body' | 'lWing' | 'rWing') {
   const pts = part === 'body' ? e.bodyPts : part === 'lWing' ? e.lWingPts : e.rWingPts;
   return transformPoly(pts, e.x, e.y, e.angle);
 }
 
-function getSwarmWorldPoly(s: SwarmShip, part: 'body' | 'lWing' | 'rWing') {
-  const pts = part === 'body' ? s.bodyPts : part === 'lWing' ? s.lWingPts : s.rWingPts;
-  return transformPoly(pts, s.x, s.y, s.angle);
+function hitEnemy(bx: number, by: number, e: Enemy): boolean {
+  if (!withinRadius(bx, by, e.x, e.y, HIT_RADIUS * 2.5)) return false;
+  // Check body first, then wings — any hit counts
+  return pointInPoly(bx, by, getEnemyWorldPoly(e, 'body'))
+    || pointInPoly(bx, by, getEnemyWorldPoly(e, 'lWing'))
+    || pointInPoly(bx, by, getEnemyWorldPoly(e, 'rWing'));
+}
+
+function getSwarmBodyWorld(s: SwarmShip) {
+  return transformPoly(s.bodyPts, s.x, s.y, 0);
 }
 
 export function update(gs: GameState): GameState {
   if (gs.mode !== 'playing') return gs;
 
-  let { cx, cy, cvx, cvy, swarm, stats, regenAccum,
+  let { cx, cy, cvx, cvy, orbitPhase, swarm, stats, regenAccum,
         enemies, playerBullets: pb, enemyBullets: eb,
-        debris, damageNumbers, touchTarget, keys,
+        debris, explosions, damageNumbers, touchTarget, keys,
         frame, xp, xpNeeded, level, waveActive, waveTimer, wave,
         upgradeChoices } = gs;
 
   frame++;
+  orbitPhase += ORBIT_ANGULAR_SPEED;
 
   // ── Center of mass movement ───────────────────────────────────────────────
   let moving = false;
@@ -75,7 +86,7 @@ export function update(gs: GameState): GameState {
     const dx = touchTarget.x - cx, dy = touchTarget.y - cy;
     const d  = Math.hypot(dx, dy);
     if (d > 8) { cvx = lerp(cvx, (dx / d) * stats.speed, 0.14); cvy = lerp(cvy, (dy / d) * stats.speed, 0.14); }
-    else       { cvx *= 0.7; cvy *= 0.7; }
+    else        { cvx *= 0.7; cvy *= 0.7; }
   }
 
   const sp2 = Math.hypot(cvx, cvy);
@@ -84,8 +95,8 @@ export function update(gs: GameState): GameState {
   cx = clamp(cx + cvx, 60, W - 60);
   cy = clamp(cy + cvy, 80, H - 60);
 
-  // ── Orbit swarm ships around center ──────────────────────────────────────
-  swarm = updateSwarmOrbits(swarm, cx, cy);
+  // ── Orbit swarm ships around center (always face up) ──────────────────────
+  swarm = updateSwarmOrbits(swarm, cx, cy, orbitPhase);
 
   // ── Fleet-wide HP regen ───────────────────────────────────────────────────
   if (stats.regenPerSec > 0) {
@@ -93,14 +104,10 @@ export function update(gs: GameState): GameState {
     if (regenAccum >= 1) {
       const heals = Math.floor(regenAccum);
       regenAccum %= 1;
-      // Distribute heals to most damaged ships first
-      swarm = [...swarm].sort((a, b) => (a.health / a.maxHealth) - (b.health / b.maxHealth));
+      const sorted = [...swarm].sort((a, b) => (a.health / a.maxHealth) - (b.health / b.maxHealth));
       let rem = heals;
-      swarm = swarm.map(s => {
-        if (rem <= 0 || s.health >= s.maxHealth) return s;
-        rem--;
-        return { ...s, health: Math.min(s.maxHealth, s.health + 1) };
-      });
+      const healTargets = new Set(sorted.slice(0, rem).map(s => s.id));
+      swarm = swarm.map(s => healTargets.has(s.id) ? { ...s, health: Math.min(s.maxHealth, s.health + 1) } : s);
     }
   }
 
@@ -109,15 +116,9 @@ export function update(gs: GameState): GameState {
   const fpsMsl = fps / MISSILE_FIRE_MULT;
   swarm = swarm.map(s => {
     let ft = s.fireTimer - 1, mt = s.missileTimer - 1;
-    while (ft <= 0) {
-      pb = [...pb, ...fireBullets(stats, s.x, s.y)];
-      ft += fps;
-    }
+    while (ft <= 0) { pb = [...pb, ...fireBullets(stats, s.x, s.y)]; ft += fps; }
     if (stats.missileCount > 0) {
-      while (mt <= 0) {
-        pb = [...pb, ...fireMissiles(stats, s.x, s.y)];
-        mt += fpsMsl;
-      }
+      while (mt <= 0) { pb = [...pb, ...fireMissiles(stats, s.x, s.y)]; mt += fpsMsl; }
     }
     return { ...s, fireTimer: ft, missileTimer: mt };
   });
@@ -129,11 +130,10 @@ export function update(gs: GameState): GameState {
 
   // ── Move & update enemies ─────────────────────────────────────────────────
   let newDebris = [...debris];
+  let newExpl   = [...explosions];
   let newNums   = [...damageNumbers];
   let newXP     = xp;
   let newEB     = [...eb];
-  // Fleet-wide total HP for life steal (we'll rebuild swarm as we process)
-  let totalSwarmHP = swarm.reduce((s, ship) => s + ship.health, 0);
 
   let newE = enemies.map(e => {
     if (e.dead) return e;
@@ -152,28 +152,26 @@ export function update(gs: GameState): GameState {
     if (e.shootsAt && eft <= 0) {
       if (behavior === 'strafe') {
         for (let bi = 0; bi < 3; bi++)
-          newEB.push({ x, y: y + 18, vx: rand(-0.6, 0.6), vy: ENEMY_BSPD + rand(0, 0.5), damage: 0.12, pierce: 0, pierceMult: 1, critChance: 0, critMult: 1, lifeSteal: 0, isMissile: false, color: '#ffff44', thick: 2 });
+          newEB.push({ x, y: y + 18, vx: rand(-0.6, 0.6), vy: ENEMY_BSPD + rand(0, 0.5), damage: 0.12, pierce: 0, pierceMult: 1, critChance: 0, critMult: 1, lifeSteal: 0, isMissile: false, color: '#ffff44', thick: 2, hitIds: [] });
         eft = randI(50, 90);
       } else {
-        newEB.push({ x, y: y + 18, vx: rand(-0.4, 0.4), vy: ENEMY_BSPD + rand(-0.3, 0.3), damage: 0.12, pierce: 0, pierceMult: 1, critChance: 0, critMult: 1, lifeSteal: 0, isMissile: false, color: '#ffff44', thick: 2 });
+        newEB.push({ x, y: y + 18, vx: rand(-0.4, 0.4), vy: ENEMY_BSPD + rand(-0.3, 0.3), damage: 0.12, pierce: 0, pierceMult: 1, critChance: 0, critMult: 1, lifeSteal: 0, isMissile: false, color: '#ffff44', thick: 2, hitIds: [] });
         eft = randI(80, 160);
       }
     }
 
-    // Ram check vs each swarm ship
+    // Ram check vs each swarm ship (body-only for player — small hitbox is intentional)
     for (const ship of swarm) {
       if (!withinRadius(x, y, ship.x, ship.y, HIT_RADIUS + 20)) continue;
-      const bodyWorld = getSwarmWorldPoly(ship, 'body');
-      if (!pointInPoly(x, y, bodyWorld)) continue;
-      const ramDmg  = ENEMY_RAM_BASE * (e.health / e.maxHealth);
-      // Apply to the rammed ship directly
-      const idx = swarm.indexOf(ship);
+      if (!pointInPoly(x, y, getSwarmBodyWorld(ship))) continue;
+      const ramDmg = ENEMY_RAM_BASE * (e.health / e.maxHealth);
+      const idx    = swarm.indexOf(ship);
       swarm = swarm.map((s, i) => i === idx ? { ...s, health: Math.max(0, s.health - ramDmg) } : s);
       const nhp = e.health - e.maxHealth * 0.3;
       if (nhp <= 0) {
-        newDebris.push(...makeDebris(getWorldPoly(e, 'body'), x, y, e.color));
-        newDebris.push(...makeDebris(getWorldPoly(e, 'lWing'), x, y, e.color));
-        newDebris.push(...makeDebris(getWorldPoly(e, 'rWing'), x, y, e.color));
+        newDebris.push(...makeDebris(getEnemyWorldPoly(e, 'body'),  x, y, e.color));
+        newDebris.push(...makeDebris(getEnemyWorldPoly(e, 'lWing'), x, y, e.color));
+        newDebris.push(...makeDebris(getEnemyWorldPoly(e, 'rWing'), x, y, e.color));
         newXP = Math.min(newXP + Math.floor(e.xpValue * (1 + stats.xpBonus * 0.1)), xpNeeded);
         return { ...e, dead: true };
       }
@@ -183,7 +181,6 @@ export function update(gs: GameState): GameState {
     return { ...e, x, y, vx: evx, vy: evy, fireTimer: eft };
   });
 
-  // Remove off-screen enemies
   newE = newE.filter(e => {
     if (e.dead) return false;
     if (e.behavior === 'strafe' && (e.x < -80 || e.x > W + 80)) return false;
@@ -194,31 +191,32 @@ export function update(gs: GameState): GameState {
   // ── Bullet vs enemy ───────────────────────────────────────────────────────
   const survived: Bullet[] = [];
   for (const b of pb) {
-    let hit = false;
-    let cm  = b.pierceMult;
+    let didHit = false;
+    let cm     = b.pierceMult;
+    let newHitIds = b.hitIds;
+
     newE = newE.map(e => {
       if (e.dead) return e;
-      if (!withinRadius(b.x, b.y, e.x, e.y, HIT_RADIUS)) return e;
-      const bodyWorld = getWorldPoly(e, 'body');
-      if (!pointInPoly(b.x, b.y, bodyWorld)) return e;
+      if (newHitIds.includes(e.id)) return e;   // pierce: skip already-hit enemies
+      if (!hitEnemy(b.x, b.y, e)) return e;
 
-      hit = true;
+      didHit = true;
+      newHitIds = [...newHitIds, e.id];
+
       const { dmg: rd, crits } = resolveCrit(b.damage * cm, b.critChance, b.critMult);
-      const fd = rd * 0.18; // damage scale (keeps early waves survivable)
-      cm *= b.pierce || 1;
+      const fd = rd * 0.18;
+      cm *= (b.pierce > 0 ? b.pierce : 0);
 
-      // Life steal — heal random swarm ship (favour most damaged)
+      // Life steal — heal most-damaged swarm ship
       const hs = resolveLifeSteal(b.lifeSteal);
       if (hs > 0) {
-        totalSwarmHP += hs;
         const target = [...swarm].sort((a, z) => (a.health / a.maxHealth) - (z.health / z.maxHealth))[0];
-        if (target) {
-          swarm = swarm.map(s => s.id === target.id ? { ...s, health: Math.min(s.maxHealth, s.health + hs) } : s);
-        }
+        if (target) swarm = swarm.map(s => s.id === target.id ? { ...s, health: Math.min(s.maxHealth, s.health + hs) } : s);
       }
 
-      // Missile splash
+      // Missile: splash + explosion ring
       if (b.isMissile) {
+        newExpl.push({ x: b.x, y: b.y, radius: 4, maxRadius: MISSILE_SPLASH_R, life: 1, decay: 0.045, color: '#ff8800' });
         newE = newE.map(e2 => {
           if (e2 === e || e2.dead) return e2;
           if (!withinRadius(b.x, b.y, e2.x, e2.y, MISSILE_SPLASH_R)) return e2;
@@ -226,9 +224,9 @@ export function update(gs: GameState): GameState {
           newNums.push(mkNum(e2.x + rand(-8, 8), e2.y - 12, sd * 5.5, false, true));
           const nhp = e2.health - sd;
           if (nhp <= 0) {
-            newDebris.push(...makeDebris(getWorldPoly(e2, 'body'),  e2.x, e2.y, e2.color));
-            newDebris.push(...makeDebris(getWorldPoly(e2, 'lWing'), e2.x, e2.y, e2.color));
-            newDebris.push(...makeDebris(getWorldPoly(e2, 'rWing'), e2.x, e2.y, e2.color));
+            newDebris.push(...makeDebris(getEnemyWorldPoly(e2, 'body'),  e2.x, e2.y, e2.color));
+            newDebris.push(...makeDebris(getEnemyWorldPoly(e2, 'lWing'), e2.x, e2.y, e2.color));
+            newDebris.push(...makeDebris(getEnemyWorldPoly(e2, 'rWing'), e2.x, e2.y, e2.color));
             newXP = Math.min(newXP + Math.floor(e2.xpValue * (1 + stats.xpBonus * 0.1)), xpNeeded);
             return { ...e2, dead: true };
           }
@@ -239,21 +237,25 @@ export function update(gs: GameState): GameState {
       newNums.push(mkNum(e.x + rand(-10, 10), e.y - 18, rd, crits > 0, false));
       const nhp = e.health - fd;
       if (nhp <= 0) {
-        newDebris.push(...makeDebris(getWorldPoly(e, 'body'),  e.x, e.y, e.color));
-        newDebris.push(...makeDebris(getWorldPoly(e, 'lWing'), e.x, e.y, e.color));
-        newDebris.push(...makeDebris(getWorldPoly(e, 'rWing'), e.x, e.y, e.color));
+        newDebris.push(...makeDebris(getEnemyWorldPoly(e, 'body'),  e.x, e.y, e.color));
+        newDebris.push(...makeDebris(getEnemyWorldPoly(e, 'lWing'), e.x, e.y, e.color));
+        newDebris.push(...makeDebris(getEnemyWorldPoly(e, 'rWing'), e.x, e.y, e.color));
         newXP = Math.min(newXP + Math.floor(e.xpValue * (1 + stats.xpBonus * 0.1)), xpNeeded);
         return { ...e, dead: true };
       }
       return { ...e, health: nhp };
     });
 
-    if (!hit) survived.push(b);
-    else if (b.pierce > 0 && cm >= 0.02) survived.push({ ...b, pierceMult: cm });
+    // Keep bullet if it can still pierce (and hasn't exploded for missiles)
+    if (!didHit) {
+      survived.push(b);
+    } else if (!b.isMissile && b.pierce > 0 && cm >= 0.02) {
+      survived.push({ ...b, pierceMult: cm, hitIds: newHitIds });
+    }
   }
   pb = survived;
 
-  // ── Enemy bullets vs swarm ships ──────────────────────────────────────────
+  // ── Enemy bullets vs swarm ships (body-only — small hitbox intentional) ───
   newEB = newEB
     .map(b => ({ ...b, x: b.x + b.vx, y: b.y + b.vy }))
     .filter(b => b.y < H + 20 && b.y > -20 && b.x > -20 && b.x < W + 20);
@@ -261,26 +263,31 @@ export function update(gs: GameState): GameState {
   newEB = newEB.filter(b => {
     for (const ship of swarm) {
       if (!withinRadius(b.x, b.y, ship.x, ship.y, HIT_RADIUS)) continue;
-      const bodyWorld = getSwarmWorldPoly(ship, 'body');
-      if (!pointInPoly(b.x, b.y, bodyWorld)) continue;
+      if (!pointInPoly(b.x, b.y, getSwarmBodyWorld(ship))) continue;
       swarm = swarm.map(s => s.id === ship.id ? { ...s, health: Math.max(0, s.health - b.damage) } : s);
-      return false; // bullet consumed
+      return false;
     }
     return true;
   });
 
-  // ── Remove dead swarm ships ───────────────────────────────────────────────
+  // ── Remove dead swarm ships; rebalance slots ──────────────────────────────
   const deadShips = swarm.filter(s => s.health <= 0);
   deadShips.forEach(s => {
-    newDebris.push(...makeDebris(getSwarmWorldPoly(s, 'body'),  s.x, s.y, s.color));
-    newDebris.push(...makeDebris(getSwarmWorldPoly(s, 'lWing'), s.x, s.y, s.color));
-    newDebris.push(...makeDebris(getSwarmWorldPoly(s, 'rWing'), s.x, s.y, s.color));
+    newDebris.push(...makeDebris(getSwarmBodyWorld(s),                   s.x, s.y, s.color));
+    newDebris.push(...makeDebris(transformPoly(s.lWingPts, s.x, s.y, 0), s.x, s.y, s.color));
+    newDebris.push(...makeDebris(transformPoly(s.rWingPts, s.x, s.y, 0), s.x, s.y, s.color));
   });
-  swarm = swarm.filter(s => s.health > 0);
+  if (deadShips.length > 0) {
+    swarm = reindexSwarm(swarm.filter(s => s.health > 0));
+  }
+
+  // ── Update explosions ─────────────────────────────────────────────────────
+  newExpl = newExpl
+    .map(ex => ({ ...ex, radius: ex.radius + (ex.maxRadius - ex.radius) * 0.18, life: ex.life - ex.decay }))
+    .filter(ex => ex.life > 0);
 
   newDebris = updateDebris(newDebris);
 
-  // Update damage numbers
   newNums = newNums
     .map(n => ({ ...n, y: n.y + n.vy, vy: n.vy * 0.95, life: n.life - n.decay }))
     .filter(n => n.life > 0);
@@ -290,10 +297,7 @@ export function update(gs: GameState): GameState {
   // ── Wave management ───────────────────────────────────────────────────────
   let mode: GameState['mode'] = gs.mode;
   let newLevel = level;
-  let nwa   = waveActive;
-  let nwt   = waveTimer;
-  let uc    = upgradeChoices;
-  let nw    = wave;
+  let nwa = waveActive, nwt = waveTimer, uc = upgradeChoices, nw = wave;
 
   if (waveActive && newE.length === 0) { nwa = false; nwt = 90; }
   if (!nwa && nwt > 0) {
@@ -302,9 +306,7 @@ export function update(gs: GameState): GameState {
       if (newXP >= xpNeeded) {
         mode = 'upgrade';
         uc   = pickUpgrades(3);
-        newLevel = level + 1;
-        newXP = 0;
-        xpNeeded = xpForLevel(newLevel);
+        newLevel = level + 1; newXP = 0; xpNeeded = xpForLevel(newLevel);
       } else {
         newE = buildWave(nw); nw++; nwa = true;
       }
@@ -312,19 +314,19 @@ export function update(gs: GameState): GameState {
   }
   if (frame === 1) { newE = buildWave(0); nw = 1; nwa = true; }
 
-  // ── Game over when swarm is empty ─────────────────────────────────────────
   if (swarm.length === 0) mode = 'gameover';
 
   return {
     ...gs,
     frame, mode, wave: nw, level: newLevel,
     xp: newXP, xpNeeded,
-    cx, cy, cvx, cvy,
+    cx, cy, cvx, cvy, orbitPhase,
     swarm, stats, regenAccum,
     enemies: newE,
     playerBullets: pb,
     enemyBullets: newEB,
     debris: newDebris,
+    explosions: newExpl,
     damageNumbers: newNums,
     waveActive: nwa, waveTimer: nwt,
     upgradeChoices: uc,

@@ -1,6 +1,5 @@
 import { useEffect, useRef, useCallback } from 'react';
-import { initState, update } from './game';
-import { buildWave, mkSwarmFighter } from './game';
+import { initState, update, buildWave, mkSwarmFighter } from './game';
 import { cardHitIndex } from './render/drawUpgrade';
 import { drawGame } from './render';
 import type { GameState } from './game';
@@ -8,30 +7,30 @@ import type { GameState } from './game';
 const W = 390, H = 700;
 
 export default function App() {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const gsRef     = useRef<GameState>(initState());
-  const rafRef    = useRef<number>(0);
+  const canvasRef    = useRef<HTMLCanvasElement>(null);
+  const gsRef        = useRef<GameState>(initState());
+  const rafRef       = useRef<number>(0);
+  const pointerDown  = useRef(false);  // track whether pointer is currently pressed
 
   // Keyboard
   useEffect(() => {
     const kd = (e: KeyboardEvent) => { gsRef.current.keys[e.key] = true;  e.preventDefault(); };
     const ku = (e: KeyboardEvent) => { gsRef.current.keys[e.key] = false; };
     window.addEventListener('keydown', kd, { passive: false });
-    window.addEventListener('keyup', ku);
+    window.addEventListener('keyup',   ku);
     return () => { window.removeEventListener('keydown', kd); window.removeEventListener('keyup', ku); };
   }, []);
 
-  // Canvas-relative pointer position
-  const canvasPos = useCallback((e: PointerEvent | React.PointerEvent): { x: number; y: number } | null => {
+  const canvasPos = useCallback((e: React.PointerEvent): { x: number; y: number } | null => {
     const c = canvasRef.current; if (!c) return null;
     const r  = c.getBoundingClientRect();
     const sx = c.width  / r.width;
     const sy = c.height / r.height;
-    const src = 'touches' in e ? (e as unknown as TouchEvent).touches[0] : e;
-    return { x: (src.clientX - r.left) * sx, y: (src.clientY - r.top) * sy };
+    return { x: (e.clientX - r.left) * sx, y: (e.clientY - r.top) * sy };
   }, []);
 
   const onDown = useCallback((e: React.PointerEvent) => {
+    pointerDown.current = true;
     const p  = canvasPos(e); if (!p) return;
     const gs = gsRef.current;
 
@@ -43,15 +42,9 @@ export default function App() {
     if (gs.mode === 'upgrade') {
       const idx = cardHitIndex(p.x, p.y, gs);
       if (idx >= 0) {
-        const u       = gs.upgradeChoices[idx];
-        const newStats = u.apply(gs.stats);
-        const we      = buildWave(gs.wave);
-        // Respawn a ship if swarm fell to 1 on level-up (grace mechanic)
-        let newSwarm = gs.swarm;
-        if (newSwarm.length < 3 && Math.random() < 0.4) {
-          const a = (Math.PI * 2 / (newSwarm.length + 1)) * newSwarm.length - Math.PI / 2;
-          newSwarm = [...newSwarm, mkSwarmFighter(a, 55)];
-        }
+        const u   = gs.upgradeChoices[idx];
+        const { stats: newStats, swarm: newSwarm } = u.apply(gs.stats, gs.swarm);
+        const we  = buildWave(gs.wave);
         gsRef.current = {
           ...gs, stats: newStats, swarm: newSwarm,
           mode: 'playing', upgradeChoices: [],
@@ -67,12 +60,15 @@ export default function App() {
 
   const onMove = useCallback((e: React.PointerEvent) => {
     e.preventDefault();
+    // Only follow pointer while button is held — avoids cursor chasing on desktop
+    if (!pointerDown.current) return;
     if (gsRef.current.mode !== 'playing') return;
     const p = canvasPos(e); if (!p) return;
     gsRef.current = { ...gsRef.current, touchTarget: p };
   }, [canvasPos]);
 
   const onUp = useCallback(() => {
+    pointerDown.current = false;
     gsRef.current = { ...gsRef.current, touchTarget: null };
   }, []);
 
@@ -81,21 +77,29 @@ export default function App() {
     const c = canvasRef.current; if (!c) return;
     const ctx = c.getContext('2d')!;
     let running = true;
-
     function loop() {
       if (!running) return;
       rafRef.current = requestAnimationFrame(loop);
-      gsRef.current = update(gsRef.current);
+      gsRef.current  = update(gsRef.current);
       drawGame(ctx, gsRef.current);
     }
     loop();
     return () => { running = false; cancelAnimationFrame(rafRef.current); };
   }, []);
 
+  // Expose mkSwarmFighter on window for dev testing (add ships via console)
+  useEffect(() => {
+    (window as unknown as Record<string, unknown>)['addShip'] = () => {
+      const gs = gsRef.current;
+      const newSlot = gs.swarm.length;
+      gsRef.current = { ...gs, swarm: [...gs.swarm, mkSwarmFighter(newSlot, 55)] };
+    };
+  }, []);
+
   return (
     <div style={{
-      display: 'flex', flexDirection: 'column', alignItems: 'center',
-      justifyContent: 'center', height: '100vh', background: '#04080f', userSelect: 'none',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      height: '100vh', background: '#04080f', userSelect: 'none', overflow: 'hidden',
     }}>
       <canvas
         ref={canvasRef}
@@ -103,11 +107,17 @@ export default function App() {
         onPointerDown={onDown}
         onPointerMove={onMove}
         onPointerUp={onUp}
-        style={{ display: 'block', width: `min(${W}px, 100vw)`, height: 'auto', touchAction: 'none', cursor: 'crosshair' }}
+        onPointerLeave={onUp}
+        style={{
+          display: 'block',
+          // Fill available height, maintain 390:700 aspect ratio; never exceed viewport width
+          height: '100vh',
+          width: 'auto',
+          maxWidth: '100vw',
+          touchAction: 'none',
+          cursor: 'crosshair',
+        }}
       />
-      <div style={{ marginTop: 6, fontSize: 10, color: '#223', fontFamily: 'monospace', textAlign: 'center' }}>
-        drag to move · arrow keys · auto-fire
-      </div>
     </div>
   );
 }

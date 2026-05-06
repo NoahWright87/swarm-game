@@ -1,5 +1,5 @@
 export const CONN = {
-  wing: { depth: 14, halfWidth: 11 },
+  wing: { depth: 7, halfWidth: 5 },
 } as const;
 
 // In game space, ship geometry is centered at (0,0) pointing UP.
