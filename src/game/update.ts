@@ -115,7 +115,10 @@ export function update(gs: GameState): GameState {
   const fps    = 60 / stats.shotsPerSec;
   const fpsMsl = fps / MISSILE_FIRE_MULT;
   swarm = swarm.map(s => {
-    let ft = s.fireTimer - 1, mt = s.missileTimer - 1;
+    let ft = s.fireTimer - 1;
+    // Only tick missileTimer when missiles are equipped — prevents burst-fire
+    // on the first frame after acquiring the +1 Missile upgrade
+    let mt = stats.missileCount > 0 ? s.missileTimer - 1 : s.missileTimer;
     while (ft <= 0) { pb = [...pb, ...fireBullets(stats, s.x, s.y)]; ft += fps; }
     if (stats.missileCount > 0) {
       while (mt <= 0) { pb = [...pb, ...fireMissiles(stats, s.x, s.y)]; mt += fpsMsl; }
