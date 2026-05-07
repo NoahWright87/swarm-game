@@ -1,6 +1,6 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { initState, update, buildWave, mkSwarmFighter, pickUpgrades } from './game';
-import { cardHitIndex, rerollHitTest } from './render/drawUpgrade';
+import { cardHitIndex, rerollHitTest, autoLevelUpHitTest } from './render/drawUpgrade';
 import { drawGame } from './render';
 import type { GameState } from './game';
 
@@ -40,6 +40,10 @@ export default function App() {
     }
 
     if (gs.mode === 'upgrade') {
+      if (autoLevelUpHitTest(p.x, p.y)) {
+        gsRef.current = { ...gs, autoLevelUp: !gs.autoLevelUp };
+        return;
+      }
       if (rerollHitTest(p.x, p.y)) {
         gsRef.current = { ...gs, upgradeChoices: pickUpgrades(3) };
         return;

@@ -111,6 +111,8 @@ export interface GameState {
   waveActive: boolean;
   waveTimer: number;
   upgradeChoices: Upgrade[];
+  autoLevelUp: boolean;
+  autoPickTimer: number;   // frames remaining before auto-pick fires (0 when inactive)
   touchTarget: { x: number; y: number } | null;
   keys: Record<string, boolean>;
 }

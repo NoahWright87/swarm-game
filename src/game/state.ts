@@ -58,6 +58,8 @@ export function initState(): GameState {
     waveActive: false,
     waveTimer: 0,
     upgradeChoices: [],
+    autoLevelUp: false,
+    autoPickTimer: 0,
     touchTarget: null,
     keys: {},
   };

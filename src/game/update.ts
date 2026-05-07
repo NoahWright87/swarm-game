@@ -8,7 +8,8 @@ import type { GameState, SwarmShip, Enemy, Bullet, DamageNumber } from './types'
 
 const W = 390, H = 700;
 const TAU = Math.PI * 2;
-const ENEMY_BSPD   = 3.0;
+const ENEMY_BSPD       = 3.0;
+const AUTO_PICK_DELAY  = 210;  // ~3.5 s at 60 fps
 const ENEMY_RAM_BASE = 0.28;
 const ORBIT_ANGULAR_SPEED = 0.022;
 const HIT_RADIUS   = 22;  // broad-phase radius (matches smaller ships)
@@ -64,13 +65,33 @@ function getSwarmBodyWorld(s: SwarmShip) {
 }
 
 export function update(gs: GameState): GameState {
+  // Auto-level-up: tick timer and fire when it expires
+  if (gs.mode === 'upgrade' && gs.autoLevelUp && gs.upgradeChoices.length > 0) {
+    const autoPickTimer = gs.autoPickTimer - 1;
+    if (autoPickTimer <= 0) {
+      const idx = Math.floor(Math.random() * gs.upgradeChoices.length);
+      const u   = gs.upgradeChoices[idx];
+      const { stats, swarm } = u.apply(gs.stats, gs.swarm);
+      return {
+        ...gs,
+        stats, swarm,
+        mode: 'playing', upgradeChoices: [],
+        enemies: buildWave(gs.wave), wave: gs.wave + 1, waveActive: true,
+        playerBullets: [], enemyBullets: [], damageNumbers: [],
+        frame: gs.frame + 1,
+        autoPickTimer: 0,
+      };
+    }
+    return { ...gs, autoPickTimer, frame: gs.frame + 1 };
+  }
+
   if (gs.mode !== 'playing') return gs;
 
   let { cx, cy, cvx, cvy, orbitPhase, swarm, stats, regenAccum,
         enemies, playerBullets: pb, enemyBullets: eb,
         debris, explosions, damageNumbers, touchTarget, keys,
         frame, xp, xpNeeded, level, waveActive, waveTimer, wave,
-        upgradeChoices } = gs;
+        upgradeChoices, autoPickTimer } = gs;
 
   frame++;
   orbitPhase += ORBIT_ANGULAR_SPEED;
@@ -310,6 +331,7 @@ export function update(gs: GameState): GameState {
         mode = 'upgrade';
         uc   = pickUpgrades(3);
         newLevel = level + 1; newXP = 0; xpNeeded = xpForLevel(newLevel);
+        autoPickTimer = AUTO_PICK_DELAY;
       } else {
         newE = buildWave(nw); nw++; nwa = true;
       }
@@ -333,6 +355,7 @@ export function update(gs: GameState): GameState {
     damageNumbers: newNums,
     waveActive: nwa, waveTimer: nwt,
     upgradeChoices: uc,
+    autoPickTimer,
     touchTarget, keys,
   };
 }

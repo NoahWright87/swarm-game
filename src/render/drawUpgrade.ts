@@ -11,6 +11,13 @@ const REROLL_BTN_H  = 36;
 const REROLL_BTN_X  = 80;
 const REROLL_BTN_W  = W - 160;
 
+const AUTO_ROW_Y    = REROLL_BTN_Y + REROLL_BTN_H + 14;
+const AUTO_BOX_X    = W / 2 - 68;
+const AUTO_BOX_SIZE = 14;
+const AUTO_PROG_Y   = AUTO_ROW_Y + 22;
+const AUTO_PROG_W   = W - 80;
+const AUTO_PROG_H   = 5;
+
 export function cardHitIndex(x: number, y: number, gs: GameState): number {
   for (let i = 0; i < gs.upgradeChoices.length; i++) {
     const by = UPGRADE_CARD_Y0 + i * (UPGRADE_CARD_H + 7);
@@ -22,6 +29,12 @@ export function cardHitIndex(x: number, y: number, gs: GameState): number {
 export function rerollHitTest(x: number, y: number): boolean {
   return x >= REROLL_BTN_X && x <= REROLL_BTN_X + REROLL_BTN_W
       && y >= REROLL_BTN_Y && y <= REROLL_BTN_Y + REROLL_BTN_H;
+}
+
+export function autoLevelUpHitTest(x: number, y: number): boolean {
+  // Hit area covers the checkbox + label row
+  return x >= AUTO_BOX_X - 4 && x <= AUTO_BOX_X + AUTO_BOX_SIZE + 100
+      && y >= AUTO_ROW_Y - AUTO_BOX_SIZE && y <= AUTO_ROW_Y + 4;
 }
 
 export function drawUpgrade(ctx: CanvasRenderingContext2D, gs: GameState): void {
@@ -80,4 +93,40 @@ export function drawUpgrade(ctx: CanvasRenderingContext2D, gs: GameState): void 
   ctx.shadowColor = '#334466'; ctx.shadowBlur = 6;
   ctx.fillText('↺  reroll', W / 2, REROLL_BTN_Y + 23);
   ctx.restore();
+
+  // Auto level-up checkbox
+  ctx.save();
+  const checked = gs.autoLevelUp;
+  ctx.strokeStyle = checked ? '#00ffff' : '#4a6080'; ctx.lineWidth = 1.5;
+  ctx.fillStyle   = checked ? '#00ffff22' : 'rgba(0,0,0,0)';
+  ctx.globalAlpha = 0.9;
+  ctx.beginPath(); ctx.roundRect(AUTO_BOX_X, AUTO_ROW_Y - AUTO_BOX_SIZE, AUTO_BOX_SIZE, AUTO_BOX_SIZE, 3);
+  ctx.fill(); ctx.stroke();
+  if (checked) {
+    ctx.strokeStyle = '#00ffff'; ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(AUTO_BOX_X + 2,                  AUTO_ROW_Y - AUTO_BOX_SIZE / 2);
+    ctx.lineTo(AUTO_BOX_X + AUTO_BOX_SIZE / 2,  AUTO_ROW_Y - 2);
+    ctx.lineTo(AUTO_BOX_X + AUTO_BOX_SIZE - 1,  AUTO_ROW_Y - AUTO_BOX_SIZE + 1);
+    ctx.stroke();
+  }
+  ctx.font = '12px system-ui'; ctx.textAlign = 'left';
+  ctx.fillStyle = checked ? '#00ffff' : '#7a90a8';
+  ctx.fillText('auto level-up', AUTO_BOX_X + AUTO_BOX_SIZE + 6, AUTO_ROW_Y - 2);
+  ctx.restore();
+
+  // Progress bar — only drawn when auto is on
+  if (checked && gs.autoPickTimer > 0) {
+    const frac = gs.autoPickTimer / 210;  // matches AUTO_PICK_DELAY in update.ts
+    const barX = (W - AUTO_PROG_W) / 2;
+    ctx.save();
+    ctx.fillStyle = '#0a1520'; ctx.strokeStyle = '#223';
+    ctx.beginPath(); ctx.roundRect(barX, AUTO_PROG_Y, AUTO_PROG_W, AUTO_PROG_H, 2);
+    ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#00ffff66';
+    ctx.shadowColor = '#00ffff'; ctx.shadowBlur = 6;
+    ctx.beginPath(); ctx.roundRect(barX, AUTO_PROG_Y, AUTO_PROG_W * frac, AUTO_PROG_H, 2);
+    ctx.fill();
+    ctx.restore();
+  }
 }
