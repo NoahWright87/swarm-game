@@ -14,7 +14,15 @@ export default function App() {
 
   // Keyboard
   useEffect(() => {
-    const kd = (e: KeyboardEvent) => { gsRef.current.keys[e.key] = true;  e.preventDefault(); };
+    const kd = (e: KeyboardEvent) => {
+      gsRef.current.keys[e.key] = true;
+      // Dev cheats (playing mode only)
+      if (gsRef.current.mode === 'playing') {
+        if (e.key === '[') gsRef.current = { ...gsRef.current, enemies: [] };                         // skip wave
+        if (e.key === ']') gsRef.current = { ...gsRef.current, enemies: [], xp: gsRef.current.xpNeeded }; // force level-up
+      }
+      e.preventDefault();
+    };
     const ku = (e: KeyboardEvent) => { gsRef.current.keys[e.key] = false; };
     window.addEventListener('keydown', kd, { passive: false });
     window.addEventListener('keyup',   ku);

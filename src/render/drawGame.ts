@@ -60,12 +60,15 @@ export function drawGame(ctx: CanvasRenderingContext2D, gs: GameState): void {
 
   // Player bullets
   gs.playerBullets.forEach(b => {
+    const len = b.isMissile ? 8 : 5;
+    const angle = Math.atan2(b.vy, b.vx);
+    const cos = Math.cos(angle), sin = Math.sin(angle);
     ctx.save();
     ctx.shadowColor = b.color; ctx.shadowBlur = b.isMissile ? 14 : 8;
     ctx.strokeStyle = b.color; ctx.lineWidth = b.thick; ctx.globalAlpha = 0.95;
     ctx.beginPath();
-    ctx.moveTo(b.x, b.y - (b.isMissile ? 8 : 5));
-    ctx.lineTo(b.x, b.y + (b.isMissile ? 8 : 5));
+    ctx.moveTo(b.x - cos * len, b.y - sin * len);
+    ctx.lineTo(b.x + cos * len, b.y + sin * len);
     ctx.stroke();
     ctx.restore();
   });

@@ -1,4 +1,5 @@
 import { transformPoly, pointInPoly, withinRadius, makeDebris, updateDebris } from '../geometry';
+import type { Point } from '../geometry';
 import { resolveCrit, resolveLifeSteal } from './combat';
 import { fireBullets, fireMissiles, MISSILE_FIRE_MULT, MISSILE_SPLASH_R, MISSILE_SPLASH_FRAC } from './bullets';
 import { buildWave } from './enemies';
@@ -10,6 +11,8 @@ const W = 390, H = 700;
 const TAU = Math.PI * 2;
 const ENEMY_BSPD       = 3.0;
 const AUTO_PICK_DELAY  = 210;  // ~3.5 s at 60 fps
+const CELL  = 80;              // spatial grid cell size (px)
+const GCOLS = Math.ceil(W / CELL); // 5 columns
 const ENEMY_RAM_BASE = 0.28;
 const ORBIT_ANGULAR_SPEED = 0.022;
 const HIT_RADIUS   = 22;  // broad-phase radius (matches smaller ships)
@@ -52,12 +55,28 @@ function getEnemyWorldPoly(e: Enemy, part: 'body' | 'lWing' | 'rWing') {
   return transformPoly(pts, e.x, e.y, e.angle);
 }
 
-function hitEnemy(bx: number, by: number, e: Enemy): boolean {
-  if (!withinRadius(bx, by, e.x, e.y, HIT_RADIUS * 2.5)) return false;
-  // Check body first, then wings — any hit counts
-  return pointInPoly(bx, by, getEnemyWorldPoly(e, 'body'))
-    || pointInPoly(bx, by, getEnemyWorldPoly(e, 'lWing'))
-    || pointInPoly(bx, by, getEnemyWorldPoly(e, 'rWing'));
+// Returns true if line segment AB intersects line segment CD.
+function segmentsIntersect(
+  ax: number, ay: number, bx: number, by: number,
+  cx: number, cy: number, dx: number, dy: number,
+): boolean {
+  const d1x = bx - ax, d1y = by - ay;
+  const d2x = dx - cx, d2y = dy - cy;
+  const denom = d1x * d2y - d1y * d2x;
+  if (Math.abs(denom) < 1e-9) return false;
+  const t = ((cx - ax) * d2y - (cy - ay) * d2x) / denom;
+  const u = ((cx - ax) * d1y - (cy - ay) * d1x) / denom;
+  return t >= 0 && t <= 1 && u >= 0 && u <= 1;
+}
+
+// Returns true if segment AB crosses any edge of poly. Exits on first hit.
+function segHitsPoly(ax: number, ay: number, bx: number, by: number, poly: Point[]): boolean {
+  for (let i = 0, n = poly.length; i < n; i++) {
+    const [cx, cy] = poly[i];
+    const [dx, dy] = poly[(i + 1) % n];
+    if (segmentsIntersect(ax, ay, bx, by, cx, cy, dx, dy)) return true;
+  }
+  return false;
 }
 
 function getSwarmBodyWorld(s: SwarmShip) {
@@ -213,18 +232,54 @@ export function update(gs: GameState): GameState {
   });
 
   // ── Bullet vs enemy ───────────────────────────────────────────────────────
+  // Pre-compute world polys once (reused for hit tests and debris) + build spatial grid
+  type EnemyWP = { body: Point[]; lWing: Point[]; rWing: Point[] };
+  const polyCache = new Map<number, EnemyWP>();
+  const spatGrid  = new Map<number, number[]>(); // grid cell key → [enemy id, ...]
+  for (const e of newE) {
+    if (e.dead) continue;
+    const wp: EnemyWP = {
+      body:  transformPoly(e.bodyPts,  e.x, e.y, e.angle),
+      lWing: transformPoly(e.lWingPts, e.x, e.y, e.angle),
+      rWing: transformPoly(e.rWingPts, e.x, e.y, e.angle),
+    };
+    polyCache.set(e.id, wp);
+    const gk = Math.floor(e.y / CELL) * 100 + Math.max(0, Math.min(GCOLS - 1, Math.floor(e.x / CELL)));
+    const gcell = spatGrid.get(gk);
+    if (gcell) gcell.push(e.id); else spatGrid.set(gk, [e.id]);
+  }
+
   const survived: Bullet[] = [];
   for (const b of pb) {
-    let didHit = false;
-    let cm     = b.pierceMult;
+    const ax = b.x - b.vx, ay = b.y - b.vy; // bullet segment: prev → current position
+
+    // Collect candidates from 3×3 grid neighbourhood
+    const bcol = Math.max(0, Math.min(GCOLS - 1, Math.floor(b.x / CELL)));
+    const brow = Math.floor(b.y / CELL);
+    const cands = new Set<number>();
+    for (let dc = -1; dc <= 1; dc++) {
+      for (let dr = -1; dr <= 1; dr++) {
+        const gc = spatGrid.get((brow + dr) * 100 + Math.max(0, Math.min(GCOLS - 1, bcol + dc)));
+        if (gc) for (const id of gc) cands.add(id);
+      }
+    }
+
+    let didHit    = false;
+    let cm        = b.pierceMult;
     let newHitIds = b.hitIds;
 
     newE = newE.map(e => {
       if (e.dead) return e;
-      if (newHitIds.includes(e.id)) return e;   // pierce: skip already-hit enemies
-      if (!hitEnemy(b.x, b.y, e)) return e;
+      if (newHitIds.includes(e.id)) return e;
+      if (!cands.has(e.id)) return e;                              // grid cull
+      if (!withinRadius(b.x, b.y, e.x, e.y, HIT_RADIUS * 2.5) &&
+          !withinRadius(ax,  ay,  e.x, e.y, HIT_RADIUS * 2.5))  return e; // broad phase
+      const wp = polyCache.get(e.id)!;
+      if (!segHitsPoly(ax, ay, b.x, b.y, wp.body)  &&
+          !segHitsPoly(ax, ay, b.x, b.y, wp.lWing) &&
+          !segHitsPoly(ax, ay, b.x, b.y, wp.rWing)) return e;
 
-      didHit = true;
+      didHit    = true;
       newHitIds = [...newHitIds, e.id];
 
       const { dmg: rd, crits } = resolveCrit(b.damage * cm, b.critChance, b.critMult);
@@ -238,7 +293,7 @@ export function update(gs: GameState): GameState {
         if (target) swarm = swarm.map(s => s.id === target.id ? { ...s, health: Math.min(s.maxHealth, s.health + hs) } : s);
       }
 
-      // Missile: splash + explosion ring
+      // Missile: splash (radius check) + explosion ring
       if (b.isMissile) {
         newExpl.push({ x: b.x, y: b.y, radius: 4, maxRadius: MISSILE_SPLASH_R, life: 1, decay: 0.045, color: '#ff8800' });
         newE = newE.map(e2 => {
@@ -248,9 +303,12 @@ export function update(gs: GameState): GameState {
           newNums.push(mkNum(e2.x + rand(-8, 8), e2.y - 12, sd * 5.5, false, true));
           const nhp = e2.health - sd;
           if (nhp <= 0) {
-            newDebris.push(...makeDebris(getEnemyWorldPoly(e2, 'body'),  e2.x, e2.y, e2.color));
-            newDebris.push(...makeDebris(getEnemyWorldPoly(e2, 'lWing'), e2.x, e2.y, e2.color));
-            newDebris.push(...makeDebris(getEnemyWorldPoly(e2, 'rWing'), e2.x, e2.y, e2.color));
+            const wp2 = polyCache.get(e2.id);
+            if (wp2) {
+              newDebris.push(...makeDebris(wp2.body,  e2.x, e2.y, e2.color));
+              newDebris.push(...makeDebris(wp2.lWing, e2.x, e2.y, e2.color));
+              newDebris.push(...makeDebris(wp2.rWing, e2.x, e2.y, e2.color));
+            }
             newXP = Math.min(newXP + Math.floor(e2.xpValue * (1 + stats.xpBonus * 0.1)), xpNeeded);
             return { ...e2, dead: true };
           }
@@ -261,16 +319,15 @@ export function update(gs: GameState): GameState {
       newNums.push(mkNum(e.x + rand(-10, 10), e.y - 18, rd, crits > 0, false));
       const nhp = e.health - fd;
       if (nhp <= 0) {
-        newDebris.push(...makeDebris(getEnemyWorldPoly(e, 'body'),  e.x, e.y, e.color));
-        newDebris.push(...makeDebris(getEnemyWorldPoly(e, 'lWing'), e.x, e.y, e.color));
-        newDebris.push(...makeDebris(getEnemyWorldPoly(e, 'rWing'), e.x, e.y, e.color));
+        newDebris.push(...makeDebris(wp.body,  e.x, e.y, e.color));
+        newDebris.push(...makeDebris(wp.lWing, e.x, e.y, e.color));
+        newDebris.push(...makeDebris(wp.rWing, e.x, e.y, e.color));
         newXP = Math.min(newXP + Math.floor(e.xpValue * (1 + stats.xpBonus * 0.1)), xpNeeded);
         return { ...e, dead: true };
       }
       return { ...e, health: nhp };
     });
 
-    // Keep bullet if it can still pierce (and hasn't exploded for missiles)
     if (!didHit) {
       survived.push(b);
     } else if (!b.isMissile && b.pierce > 0 && cm >= 0.02) {

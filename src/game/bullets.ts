@@ -7,9 +7,11 @@ export { MISSILE_FIRE_MULT, MISSILE_DMG_MULT };
 export const MISSILE_SPLASH_R    = 38;
 export const MISSILE_SPLASH_FRAC = 0.5;
 
+const MAX_HALF_SPREAD = Math.PI * 5 / 12; // 75° → 150° total cone
+
 export function fireBullets(s: Stats, x: number, y: number): Bullet[] {
   const n = s.bulletCount;
-  const sp = n > 1 ? 0.18 * (n - 1) : 0;
+  const sp = n > 1 ? Math.min(0.18 * (n - 1), MAX_HALF_SPREAD) : 0;
   const out: Bullet[] = [];
   for (let i = 0; i < n; i++) {
     const t = n === 1 ? 0 : (i / (n - 1) - 0.5) * 2;
@@ -29,7 +31,7 @@ export function fireBullets(s: Stats, x: number, y: number): Bullet[] {
 export function fireMissiles(s: Stats, x: number, y: number): Bullet[] {
   if (s.missileCount <= 0) return [];
   const n = s.missileCount;
-  const sp = n > 1 ? 0.22 * (n - 1) : 0;
+  const sp = n > 1 ? Math.min(0.22 * (n - 1), MAX_HALF_SPREAD) : 0;
   const out: Bullet[] = [];
   for (let i = 0; i < n; i++) {
     const t   = n === 1 ? 0 : (i / (n - 1) - 0.5) * 2;
